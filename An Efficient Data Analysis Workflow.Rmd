@@ -1,0 +1,108 @@
+---
+title: "An Efficient Data Analysis Workflow"
+author: "Osvaldo Illescas"
+date: "4/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+In this project, we will be acting as a data analyst for a company that sells books for learning programming. Your company has produced multiple books, and each has received many reviews. Your company wants we to check out the sales data and see if we can extract any useful information from it. We'll walk through this process as we progress through the mission.
+
+Let's read our dataset:
+
+```{r, message = FALSE}
+library(tidyverse)
+data <- read_csv("book_reviews.csv")
+```
+
+Let's get information about the dataset:
+
+```{r, message = FALSE}
+dim(data)
+colnames(data)
+
+for (col in colnames(data)) {
+  print(typeof(data[[col]]))
+}
+
+
+```
+
+We can check unique values on each column with the *unique* function:
+
+```{r, message = FALSE}
+unique(data[["book"]])
+unique(data[["review"]])
+unique(data[["state"]])
+unique(data[["price"]])
+```
+
+We can see that we have missing data in the "review" column. Missing data is annoying because there's nothing we can really do with it. We can't perform any analysis or calculations with missing data. For now, let's drop rows with missing data
+
+```{r, message = FALSE}
+filtered_data  <- data %>%
+  filter(!is.na(review))
+
+dim(filtered_data)
+
+unique(filtered_data[["review"]])
+```
+
+We got rid of missing values. Approximately 10 % of the set was dropped, which is acceptable. Now that we've removed all of the missing data from the dataset, we have a complete dataset. This is the ideal case that we would like to start any data analysis, so we're working towards a better dataset already.
+
+The next thing that we need to work on is the *state* column. You may have noticed that the labeling for each state is inconsistent. For example, California is written as both "California" and "CA". Both "California" and "CA" refer to the same place in the United States, so we should try to clean this up. We need to choose one of the ways to refer to the state, and stick to that convention. Making labels/strings more consistent in the data will make things easier to analyze later on.
+
+```{r, message = FALSE}
+filtered_data <- filtered_data %>%
+    mutate(
+    state = case_when(
+      state == "CA" ~ "California",
+      state == "NY" ~ "New York",
+      state == "TX" ~ "Texas",
+      state == "FL" ~ "Florida",
+      TRUE ~ state
+    )
+  )
+
+unique(filtered_data[["state"]])
+```
+
+We now have only long state names. Next we'll handle in the dataset are the reviews themselves. You may have noticed in our data exploration that the reviews take the form of strings, ranging from "Poor" to "Excellent". Our goal is to evaluate the ratings of each of the textbooks, but there's not much we can do with text versions of the review scores. It would be better if we were to convert the reviews into a numerical form. Let's add a new column to our dataset called "review_num".
+
+
+It's also have a good idea to have a column that classifies the review as "high" or not. Let's create a column called is_high, that contains **TRUE** if the review is 4 or more, otherwise it will be **FALSE**.
+
+
+```{r, message = FALSE}
+filtered_data <- filtered_data %>%
+  mutate(review_num = case_when(
+    review == "Poor" ~ 1,
+    review == "Fair" ~ 2,
+    review == "Good" ~ 3,
+    review == "Great" ~ 4,
+    review == "Excellent" ~5
+  ),
+  is_high_review = if_else(review_num >= 4, TRUE, FALSE)
+)
+
+head(filtered_data)
+```
+
+With all of our data cleaning, now we're ready to do some analysis of the data. Our main goal is to figure out what book is the most profitable. How will we judge what the "most profitable" book is though? Our dataset represents customer purchases. One way to define "most profitable" might be to just choose the book that's purchased the most. Another way to define it would be to see how much money each book generates overall.
+For now, let's use the first idea of "most profitable" and count how many books were purchased.
+
+```{r, message = FALSE}
+filtered_data %>%
+  group_by(book) %>% 
+  summarize(
+    purchased = n()
+  ) %>% 
+  arrange(-purchased)
+```
+
+We will choose "Fundamentals of R for beginners" as the most profitable book.
