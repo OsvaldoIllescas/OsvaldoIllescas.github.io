@@ -1,0 +1,215 @@
+---
+title: "Answering Business Questions using SQL"
+author: "Osvaldo Illescas"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this project, we're going to use SQL to answer some business questions.We'll work with a modified version of a database called [Chinook](https://github.com/lerocha/chinook-database#:~:text=Chinook%20is%20a%20sample%20database,single%20and%20multiple%20database%20servers.). The Chinook database contains information about various elements in a fictional digital music shop, such as artists, songs, and albums, as well as the shop's employees, customers, and the customers' purchases. All this information is contained in 11 tables. You can find a schema of the tables below:
+
+![**Chinook schema**](chinook-schema.svg)
+
+In this project, instead of using the *dbConnect()* and the *dbDisconnect()* functions, we will create a **helper function**. Let's start by importing libraries, assigning the database and writing this functions:
+```{r, message = FALSE}
+library(RSQLite)
+library(DBI)
+
+db <- 'chinook.db'
+
+run_query <- function(query) {
+  
+  conn <- dbConnect(SQLite(), db)
+  q <- dbGetQuery(conn, query)
+  dbDisconnect(conn)
+  
+  return(q)
+}
+
+show_tables <- function() {
+  query = "SELECT name, 
+                  type
+             FROM sqlite_master
+            WHERE type IN ('table', 'view')"
+  return(run_query(query))
+}
+
+show_tables()
+```
+We can see that our function returns all tables in the database, as shown in the schema.
+Imagine next situation: The Chinook record store has just signed a deal with a new record label, and you're in charge of choosing the first three albums to be added to the store. There are four albums to choose from, and all four are by artists who don't have any tracks in the store right now. The record label specializes in artists from the USA, and they have given Chinook some money to advertise the new albums in the USA. To aid in selecting albums, we're interested in finding out which genres sell the best in the USA.
+
+We'll need to write a query to find out which genres sell the most tracks in the USA, and then create a visualization of that data using SQL.
+
+```{r, message = FALSE}
+usa_tracks = '
+WITH tracks_usa AS (
+    SELECT
+        il.*
+      FROM invoice_line il
+     INNER JOIN invoice i ON i.invoice_id = il.invoice_id
+     INNER JOIN customer c ON c.customer_id = i.customer_id
+     WHERE c.country = "USA")
+
+SELECT
+    g.name genre,
+    COUNT(tu.invoice_line_id) tracks_sold,
+    CAST(COUNT(tu.invoice_line_id) AS Float) / (
+        SELECT COUNT(*)
+          FROM tracks_usa) percentage
+  FROM tracks_usa tu
+ INNER JOIN track t ON t.track_id = tu.track_id
+ INNER JOIN genre g ON g.genre_id = t.genre_id
+ GROUP BY 1
+ ORDER BY 2 DESC
+ LIMIT 10;
+ '
+
+run_query(usa_tracks)
+```
+
+We can now use ggplot to visualize our result:
+
+```{r}
+library(ggplot2)
+genre_sales = run_query(usa_tracks)
+ggplot(data = genre_sales, aes(x = reorder(genre, -percentage), 
+                               y = percentage)) +
+  geom_bar(stat = "identity")
+```
+
+Among the genres in our list rock, punk, and blues are the most popular. We can recommend the next albums:
+
+* Rock: "Dark Side of the Moon"
+* Punk: "Red Tone"
+* Blues: "Slim Jim Bites"
+
+Each customer for the Chinook store gets assigned to a sales support agent within the company when they first make a purchase. You have been asked to analyze the purchases of customers belonging to each employee to see if any sales support agent is performing either better or worse than the others.
+
+```{r, message = FALSE}
+employee_analyze = '
+
+WITH total_dollars AS (
+  SELECT
+      i.customer_id,
+      c.support_rep_id,
+      SUM(i.total) total
+    FROM invoice i 
+    INNER JOIN customer c ON i.customer_id = c.customer_id
+    GROUP BY 1, 2
+)
+
+SELECT
+    e.first_name || " " || e.last_name name,
+    td.total
+  FROM total_dollars td
+ INNER JOIN employee e ON e.employee_id = td.support_rep_id
+ GROUP BY 1;
+ '
+
+run_query(employee_analyze)
+```
+
+We can visualize this result:
+
+```{r, message = FALSE}
+employee_sales = run_query(employee_analyze)
+ggplot(data = employee_sales, aes(x = reorder(name, -total), 
+                               y = total)) +
+  geom_bar(stat = "identity")
+```
+
+Jean Peacock is the employee who has made more money.
+
+Next task is to analyze the sales data for customers from each different country. You have been given guidance to use the country value from the customers table, and ignore the country from the billing address in the invoice table.
+
+In particular, we have been directed to calculate data, for each country, on the:
+
+* Total number of customers
+* Total value of sales
+* Average value of sales per customer
+* Average order value
+
+Because there are a number of countries with only one customer, we should group these customers as "Other" in the analysis. 
+
+```{r, message = FALSE}
+sales_by_country = '
+WITH country_or_other AS
+    (
+     SELECT
+       CASE
+           WHEN (
+                 SELECT count(*)
+                 FROM customer
+                 where country = c.country
+                ) = 1 THEN "Other"
+           ELSE c.country
+       END AS country,
+       c.customer_id,
+       il.*
+     FROM invoice_line il
+     INNER JOIN invoice i ON i.invoice_id = il.invoice_id
+     INNER JOIN customer c ON c.customer_id = i.customer_id
+    )
+SELECT
+    country,
+    customers,
+    total_sales,
+    average_order,
+    customer_lifetime_value
+FROM
+    (
+    SELECT
+        country,
+        count(distinct customer_id) customers,
+        SUM(unit_price) total_sales,
+        SUM(unit_price) / count(distinct customer_id) customer_lifetime_value,
+        SUM(unit_price) / count(distinct invoice_id) average_order,
+        CASE
+            WHEN country = "Other" THEN 1
+            ELSE 0
+        END AS sort
+    FROM country_or_other
+    GROUP BY country
+    ORDER BY sort ASC, total_sales DESC
+    );
+'
+run_query(sales_by_country)
+```
+
+We can now see this results in a plot:
+
+```{r, message = FALSE}
+country_metrics = run_query(sales_by_country)
+ggplot(data = country_metrics, aes(x = reorder(country, -total_sales), 
+                                   y = total_sales, 
+                                   fill = country)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Total sales by country",
+    x = "Country",
+    y = "Total Sales"
+  ) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(data = country_metrics, aes(x = reorder(country, -customers), 
+                                   y = customers, 
+                                   fill = country)) +
+  geom_bar(stat = "identity") +
+  coord_polar("y") + 
+  labs(
+    title = "Number of customers by country",
+    x = "Country",
+    y = "Customers"
+  )
+ggplot(data = country_metrics, aes(x = reorder(country, -customer_lifetime_value), 
+                                   y = customer_lifetime_value, 
+                                   color = country)) +
+  geom_point(stat = "identity") +
+  labs(
+    title = "Customer lifetime value by country",
+    x = "Country",
+    y = "Customer Lifetime Value"
+  ) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
